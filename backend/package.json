@@ -9,5 +9,8 @@
   "author": "Todor Gerdzhikov",
   "license": "ISC",
   "type": "module",
-  "description": ""
+  "description": "",
+  "dependencies": {
+    "pg": "^8.16.3"
+  }
 }
