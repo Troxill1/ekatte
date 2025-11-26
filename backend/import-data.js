@@ -10,7 +10,7 @@ const extractSettlements = () => {
 
         settlements.pop();
         settlements.forEach((s, id) => {
-            const obj = {
+            const l = {
                 id: id + 1,
                 name: s.name,
                 ekatte: s.ekatte,
@@ -18,7 +18,7 @@ const extractSettlements = () => {
                 type: s.t_v_m
             };
 
-            data.push(obj);
+            data.push(l);
         });
 
         return data;
@@ -33,13 +33,13 @@ const extractCityHalls = () => {
 
         cityHalls.pop();
         cityHalls.forEach((c, id) => {
-            const obj = {
+            const l = {
                 id: id + 1,
                 name: c.name,
                 ekatte: c.ekatte
             };
 
-            data.push(obj);
+            data.push(l);
         });
 
         return data;
@@ -57,7 +57,7 @@ const extractMunicipalities = () => {
             const code = m.obshtina;
             const regionCode = code.substring(0, 3);
 
-            const obj = {
+            const l = {
                 id: id + 1,
                 name: m.name,
                 code,
@@ -65,7 +65,7 @@ const extractMunicipalities = () => {
                 ekatte: m.ekatte
             };
 
-            data.push(obj);
+            data.push(l);
         });
 
         return data;
@@ -80,14 +80,14 @@ const extractRegions = () => {
 
         regions.pop();
         regions.forEach((r, id) => {
-            const obj = {
+            const l = {
                 id: id + 1,
                 name: r.name,
                 code: r.oblast,
                 ekatte: r.ekatte
             };
 
-            data.push(obj);
+            data.push(l);
         });
 
         return data;
@@ -96,45 +96,72 @@ const extractRegions = () => {
     }
 };
 
-const importData = async () => {
-    try {
-        const settlements = extractSettlements();
-        const cityHalls = extractCityHalls();
-        const municipalities = extractMunicipalities();
-        const regions = extractRegions();
+const importData = async (query, locations) => {
+    const ids = [], names = [], ekattes = [];
+    const params = [ids, names, ekattes];
+    const loc = locations[0];
 
-        // TODO: validate extracted data
-        // TODO: replace the current, slow insert with bulk insert
+    // Add the required parameters for each location type
+    if (loc?.code && !loc?.regionCode) {  // region
+        const codes = locations.map(l => l.code);
+        
+        params.push(codes);
+    } else if (loc?.code && loc?.regionCode) {  // municipality
+        const codes = locations.map(l => l.code);
+        const regionCodes = locations.map(l => l.regionCode);;
 
-        for (const r of regions) {
-            const sql = "INSERT INTO regions(id, name, code, ekatte) VALUES($1, $2, $3, $4) ON CONFLICT (ekatte, code) DO NOTHING";
-            const params = [r.id, r.name, r.code, r.ekatte];
-            (await client).query(sql, params);
-        }
+        params.push(codes, regionCodes);
+    } else if (loc?.municCode && loc?.type) {  // settlement
+        const municCodes = locations.map(l => l.municCode);
+        const types = locations.map(l => l.type);
 
-        for (const m of municipalities) {
-            const sql = "INSERT INTO municipalities(id, name, code, region_code, ekatte) VALUES($1, $2, $3, $4, $5) ON CONFLICT (ekatte, code) DO NOTHING";
-            const params = [m.id, m.name, m.code, m.regionCode, m.ekatte];
-            (await client).query(sql, params);
-        }
-
-        for (const s of settlements) {
-            const sql = "INSERT INTO settlements(id, name, ekatte, munic_code, type) VALUES($1, $2, $3, $4, $5) ON CONFLICT (ekatte) DO NOTHING";
-            const params = [s.id, s.name, s.ekatte, s.municCode, s.type];
-            (await client).query(sql, params);
-        }
-
-        for (const c of cityHalls) {
-            const sql = "INSERT INTO city_halls(id, name, ekatte) VALUES($1, $2, $3) ON CONFLICT (ekatte) DO NOTHING";
-            const params = [c.id, c.name, c.ekatte];
-            (await client).query(sql, params);
-        }
-    } catch (err) {
-        console.log(err?.message || err);
+        params.push(municCodes, types);
     }
-    finally {
-        (await client).release();
+    
+    for (const l of locations) {
+        ids.push(l.id);
+        names.push(l.name);
+        ekattes.push(l.ekatte);
+    }
+
+    try {
+        (await client).query("BEGIN");
+        (await client).query(query, params);
+        (await client).query("COMMIT");
+    } catch (e) {
+        console.log(err?.message || err);
+        (await client).query("ROLLBACK");
     }
 };
 
-importData();
+const execute = async () => {
+    // TODO: validate extracted data
+
+    const regions = extractRegions();
+    let sql = "INSERT INTO regions(id, name, ekatte, code)" +
+        "SELECT * FROM UNNEST ($1::bigint[], $2::text[], $3::text[], $4::text[])" +
+        "ON CONFLICT (ekatte, code) DO NOTHING";
+    await importData(sql, regions);
+
+    const municipalities = extractMunicipalities();
+    sql = "INSERT INTO municipalities(id, name, ekatte, code, region_code)" +
+        "SELECT * FROM UNNEST ($1::bigint[], $2::text[], $3::text[], $4::text[], $5::text[])" +
+        "ON CONFLICT (ekatte, code) DO NOTHING";
+    await importData(sql, municipalities);
+
+    const settlements = extractSettlements();
+    sql = "INSERT INTO settlements(id, name, ekatte, munic_code, type)" +
+        "SELECT * FROM UNNEST ($1::bigint[], $2::text[], $3::text[], $4::text[], $5::text[])" +
+        "ON CONFLICT (ekatte) DO NOTHING";
+    await importData(sql, settlements);
+
+    const cityHalls = extractCityHalls();
+    sql = "INSERT INTO city_halls(id, name, ekatte)" +
+        "SELECT * FROM UNNEST ($1::bigint[], $2::text[], $3::text[])" +
+        "ON CONFLICT (ekatte) DO NOTHING";
+    await importData(sql, cityHalls);
+    
+    (await client).release();
+};
+
+execute();
