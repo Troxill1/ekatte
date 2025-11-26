@@ -4,6 +4,8 @@ import municipalities from "./data/municipalities.json" with { type: "json" };
 import regions from "./data/regions.json" with { type: "json" };
 import { client } from "./db-connection.js";
 
+// TODO: combine extract functions into one
+
 const extractSettlements = () => {
     try {
         const data = [];
@@ -96,22 +98,41 @@ const extractRegions = () => {
     }
 };
 
-const importData = async (query, locations) => {
+const validateJson = (loc, locationType) => {
+    if (!loc.name || typeof loc.name !== "string") return false;
+    if (!loc.ekatte || typeof loc.name !== "string") return false;
+
+    if (locationType === "region") {
+        if (!loc.code || typeof loc.code !== "string") return false;
+        
+    } else if (locationType === "municipality") {
+        if (!loc.code || typeof loc.code !== "string") return false;
+        if (!loc.regionCode || typeof loc.regionCode !== "string") return false;
+
+    } else if (locationType === "settlement") {
+        if (!loc.municCode || typeof loc.municCode !== "string") return false;
+        if (!loc.type || typeof loc.type !== "string") return false;
+    }
+
+    return true;
+};
+
+const importData = async (query, locations, locationType = "city hall") => {
     const ids = [], names = [], ekattes = [];
     const params = [ids, names, ekattes];
     const loc = locations[0];
 
     // Add the required parameters for each location type
-    if (loc?.code && !loc?.regionCode) {  // region
+    if (locationType === "region") {
         const codes = locations.map(l => l.code);
         
         params.push(codes);
-    } else if (loc?.code && loc?.regionCode) {  // municipality
+    } else if (locationType === "municipality") {
         const codes = locations.map(l => l.code);
         const regionCodes = locations.map(l => l.regionCode);;
 
         params.push(codes, regionCodes);
-    } else if (loc?.municCode && loc?.type) {  // settlement
+    } else if (locationType === "settlement") {
         const municCodes = locations.map(l => l.municCode);
         const types = locations.map(l => l.type);
 
@@ -128,34 +149,32 @@ const importData = async (query, locations) => {
         (await client).query("BEGIN");
         (await client).query(query, params);
         (await client).query("COMMIT");
-    } catch (e) {
+    } catch (err) {
         console.log(err?.message || err);
         (await client).query("ROLLBACK");
     }
 };
 
 const execute = async () => {
-    // TODO: validate extracted data
-
-    const regions = extractRegions();
+    const regions = extractRegions().filter(r => validateJson(r, "region"));
     let sql = "INSERT INTO regions(id, name, ekatte, code)" +
         "SELECT * FROM UNNEST ($1::bigint[], $2::text[], $3::text[], $4::text[])" +
         "ON CONFLICT (ekatte, code) DO NOTHING";
-    await importData(sql, regions);
+    await importData(sql, regions, "region");
 
-    const municipalities = extractMunicipalities();
+    const municipalities = extractMunicipalities().filter(m => validateJson(m, "municipality"));
     sql = "INSERT INTO municipalities(id, name, ekatte, code, region_code)" +
         "SELECT * FROM UNNEST ($1::bigint[], $2::text[], $3::text[], $4::text[], $5::text[])" +
         "ON CONFLICT (ekatte, code) DO NOTHING";
-    await importData(sql, municipalities);
+    await importData(sql, municipalities, "municipality");
 
-    const settlements = extractSettlements();
+    const settlements = extractSettlements().filter(s => validateJson(s, "settlement"));
     sql = "INSERT INTO settlements(id, name, ekatte, munic_code, type)" +
         "SELECT * FROM UNNEST ($1::bigint[], $2::text[], $3::text[], $4::text[], $5::text[])" +
         "ON CONFLICT (ekatte) DO NOTHING";
-    await importData(sql, settlements);
+    await importData(sql, settlements, "settlement");
 
-    const cityHalls = extractCityHalls();
+    const cityHalls = extractCityHalls().filter(c => validateJson(c));
     sql = "INSERT INTO city_halls(id, name, ekatte)" +
         "SELECT * FROM UNNEST ($1::bigint[], $2::text[], $3::text[])" +
         "ON CONFLICT (ekatte) DO NOTHING";
